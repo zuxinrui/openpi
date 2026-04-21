@@ -28,12 +28,16 @@ Fine-tuned(直接跑):
 
 | ckpt | 机器人 | 备注 |
 |---|---|---|
-| `pi0_fast_droid` / **`pi0_fast_droid_jointpos`**(s3 simeval bucket)| DROID Franka | **jointpos 变体是唯一验证过能和 dreamzero Isaac Lab sim 对接的** |
-| `pi0_droid` / `pi05_droid` | DROID Franka | action space 不完全明确,和 sim 对接需测试 |
+| **`pi05_droid_jointpos_polaris`** | DROID Franka | **π0.5 + 绝对关节控制,和 dreamzero Isaac Lab sim 组合已验证工作** |
+| `pi0_fast_droid_jointpos_polaris` | DROID Franka | π0-FAST 变体,fallback 选项 |
+| `pi0_droid_jointpos_polaris` | DROID Franka | π0 flow + jointpos |
+| `pi0_fast_droid` / `pi0_droid` / `pi05_droid` | DROID Franka | 默认变体,action space 可能是 delta 而非 jointpos,和 sim 对接需测试 |
 | `pi0_aloha_towel` / `pi0_aloha_tupperware` / `pi0_aloha_pen_uncap` | ALOHA 双臂 | 只适合真机 ALOHA,和 gym-aloha sim 的 cube 任务对不上 |
 | **`pi05_libero`** | LIBERO(Franka)| **LIBERO SOTA 96.85%,最推荐的 sim 起步 ckpt** |
 
-下载路径:`gs://openpi-assets/checkpoints/<name>` 或 `s3://openpi-assets-simeval/<name>`,自动缓存到 `~/.cache/openpi`(可 `OPENPI_DATA_HOME` 改)。
+所有 `*_jointpos_polaris` 变体在 `src/openpi/training/misc/polaris_config.py`,ckpt 路径 `gs://openpi-assets/checkpoints/polaris/<config_name>/`。其他走 `gs://openpi-assets/checkpoints/<name>`,自动缓存到 `~/.cache/openpi`(可 `OPENPI_DATA_HOME` 改)。
+
+> ⚠️ **老名字已废弃**:`pi0_fast_droid_jointpos`(无 `_polaris` 后缀)、`s3://openpi-assets-simeval/...` 路径在上游已移除。dreamzero 的 `run_sim_eval.py` docstring 里还写的是老名字,**以 `polaris_config.py` 为准**。
 
 ## 硬件需求(README:26-30)
 
@@ -72,13 +76,13 @@ Fine-tuned(直接跑):
 ```bash
 # LIBERO 推荐起步
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 uv run scripts/serve_policy.py \
-    policy:checkpoint --policy.config=pi05_libero \
+    --port 6000 policy:checkpoint --policy.config=pi05_libero \
     --policy.dir=gs://openpi-assets/checkpoints/pi05_libero
 
-# Isaac Lab DROID sim 对接(验证过)
-XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 uv run scripts/serve_policy.py \
-    policy:checkpoint --policy.config=pi0_fast_droid_jointpos \
-    --policy.dir=s3://openpi-assets-simeval/pi0_fast_droid_jointpos
+# Isaac Lab DROID sim 对接(本机已验证工作,端口 6000 必须)
+CUDA_VISIBLE_DEVICES=1 XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 uv run scripts/serve_policy.py \
+    --port 6000 policy:checkpoint --policy.config=pi05_droid_jointpos_polaris \
+    --policy.dir=gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris
 
 # 真机 Franka(franka-scripts 分支上 scripts/main.py)
 XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 uv run scripts/serve_policy.py \
@@ -88,8 +92,11 @@ XLA_PYTHON_CLIENT_MEM_FRACTION=0.5 uv run scripts/serve_policy.py \
 
 ### 起 client(见"两种 client 应用"表)
 
-LIBERO 一键:`docker compose -f examples/libero/compose.yml up --build`
-Isaac Lab DROID:`conda activate isaaclab3 && python /home/zuxinrui/dreamzero/eval_utils/run_sim_eval.py --remote_host=localhost --remote_port=8000`
+- **LIBERO**(一键):`docker compose -f examples/libero/compose.yml up --build`
+- **Isaac Lab DROID**:`conda activate env_isaaclab_legacy && CUDA_VISIBLE_DEVICES=0 python /home/zuxinrui/dreamzero/eval_utils/run_sim_eval.py --episodes 1 --scene 1 --host localhost --port 6000 --no-headless`
+  - **GPU 必须 swap**:sim 用 GPU0(接显示器的那张),policy server 用 GPU1。双 3090 里只有接显示器的能跑 Vulkan swapchain
+  - 用 `env_isaaclab_legacy`(Isaac Lab 2.0),**不要**用 isaaclab3(4.5)—— sim-evals 在 4.x 上 API 断裂
+  - 详细部署和踩坑见 `docs/DROID_ISAAC_SIM_DEPLOYMENT.md`
 
 ### LoRA 微调(单 3090)
 
@@ -134,8 +141,8 @@ LoRA 配置在 `src/openpi/training/config.py:679`(`paligemma_variant="gemma_2b_
 
 | 任务 | env | 关键点 |
 |---|---|---|
-| policy server(本 repo 主体)| `openpi`(Python 3.11,uv 自建)| `uv sync` 即可 |
-| Isaac Lab sim client | **`isaaclab3`**(已有)| 只需 `openpi-client` 装在里面 |
+| policy server(本 repo 主体)| `openpi` uv `.venv`(Python 3.11)| `uv sync` 即可 |
+| Isaac Lab sim client | **`env_isaaclab_legacy`**(Isaac Lab 2.0)| 用新版 isaaclab3 会因 mdp API 重组而失败 |
 | LIBERO sim client | Python 3.8 独立 env | robosuite/MuJoCo 依赖对 3.11 不友好 |
 | Franka 真机 client(franka-scripts 分支)| **Python 3.8 独立 env** | `panda_py` wheel 是 `cp38` only |
 
@@ -143,15 +150,26 @@ LoRA 配置在 `src/openpi/training/config.py:679`(`paligemma_variant="gemma_2b_
 
 - **`examples/droid/main.py` 不是仿真**,是真机 Franka(import `droid.robot_env`),没真机运行会直接挂
 - **Isaac Sim DROID 仿真要用 dreamzero 的 `run_sim_eval.py`**,openpi 本身没有 Isaac 代码
-- `pi0_fast_droid_jointpos` 是 **simeval bucket 的专供变体**(`s3://openpi-assets-simeval`),不是默认的 `gs://openpi-assets/checkpoints/pi0_fast_droid`。两者 action space 不同
-- `pi05_droid` 和 Isaac Lab sim 的兼容性**未验证**,action space 可能是 delta 而非 jointpos,先用 `pi0_fast_droid_jointpos` 打通管道再换
-- **`XLA_PYTHON_CLIENT_MEM_FRACTION=0.9`** LoRA 训练必设,否则 JAX 默认 75% = 18GB,不够
-- 双 3090 跑 LoRA + sim 评估**可以并行**:train on GPU0,sim on GPU1(各自独立 CUDA_VISIBLE_DEVICES)
-- π0.5 在这个 repo 里**只支持 flow matching head**(不支持 FAST head),训练/推理都是
+- **Config 名上游漂移**:旧名 `pi0_fast_droid_jointpos` 已改成 `pi0_fast_droid_jointpos_polaris`,搬到 `src/openpi/training/misc/polaris_config.py`。ckpt 也从 `s3://openpi-assets-simeval/...` 换到 `gs://openpi-assets/checkpoints/polaris/...`
+- `pi05_droid`(不带 `_jointpos_polaris` 后缀的默认版本)action space **可能是 delta EE** 而非绝对关节,直接丢 Isaac Sim 里机械臂会乱飞。用 `pi05_droid_jointpos_polaris` 才对
+- **`--port 6000`** 必须显式写:`serve_policy.py` 默认 8000,`run_sim_eval.py` 默认 6000,两边要对齐
+- **双 3090 开 `--no-headless` GUI 时必须用接显示器的 GPU**:sim 用 GPU0,policy 用 GPU1;Vulkan swapchain 只能在物理接 display 的 GPU 上建
+- **`XLA_PYTHON_CLIENT_MEM_FRACTION=0.9`** LoRA 训练必设,否则 JAX 默认 75% = 18GB,不够;sim 场景 0.5 足够,留空间给 Isaac Sim
+- π0.5 在这个 repo 里**只支持 flow matching head**(不支持 FAST head)
 - π0-FAST **只有 JAX 路径**,PyTorch 不支持
 - `scripts/main.py`(Franka 真机)和 openpi 的 Python 3.11 env **不兼容**(`panda_py` wheel 是 cp38),client 必须独立 env
-- gs:// 首次下载慢且无进度条,耐心等
+- gs:// 首次下载慢且无进度条,看 `~/.cache/openpi/` 的体积判断进度
+- **Isaac Sim 启动 GUI 撞 `inotify` watcher 上限**:`fs.inotify.max_user_watches=524288` 写进 sysctl 永久修复
+- **`pip install` 任何东西进 isaaclab3/env_isaaclab_legacy 都用 `--no-deps`**:Isaac Sim 硬 pin `numpy==2.3.1`,让 pip 自由解析 openpi-client deps 会把 numpy 降到 1.26.4 破坏 ABI
 
 ## 关于 dreamzero 这个邻居
 
 `/home/zuxinrui/dreamzero` 里**唯一对 openpi 有用的东西** = `eval_utils/run_sim_eval.py`(Isaac Lab DROID sim client)+ `eval_utils/policy_client.py`(WebSocket 客户端,直接 import openpi-client 库)。**其他 dreamzero 代码都不在这条工作流里**。
+
+本地 `run_sim_eval.py` 有一个 **未提交的 patch**(注释掉 `cv2.imshow`,因为 opencv-python-headless 无 GUI backend)。要撤回:`cd /home/zuxinrui/dreamzero && git checkout -- eval_utils/run_sim_eval.py`。
+
+## 相关文档
+
+- **`docs/DROID_ISAAC_SIM_DEPLOYMENT.md`** — DROID + Isaac Sim 完整部署 playbook + 所有踩过的坑(E1 inotify、E2 Vulkan、D2 USD 文件名漂移、D3 websockets 版本……)
+- `docs/remote_inference.md` — WebSocket 协议
+- `docs/docker.md` — Docker 化部署
