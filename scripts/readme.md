@@ -1,6 +1,6 @@
 # Real-robot Franka client (`franka-scripts` branch)
 
-Lab Franka Panda + RealSense client that talks to the openpi policy server over WebSocket. Runs in a **separate Python 3.8 conda env** because the libfranka Python binding is `cp38`-only.
+VU Lab Franka Panda + RealSense client that talks to the openpi policy server over WebSocket. Runs in a **separate Python 3.8 conda env** because the libfranka Python binding is `cp38`-only.
 
 ## Upstream sources
 
