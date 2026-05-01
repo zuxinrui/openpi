@@ -1,4 +1,46 @@
-network configuration for more details.
+# Real-robot Franka client (`franka-scripts` branch)
+
+Lab Franka Panda + RealSense client that talks to the openpi policy server over WebSocket. Runs in a **separate Python 3.8 conda env** because the libfranka Python binding is `cp38`-only.
+
+## Upstream sources
+
+| Component | Upstream | Notes |
+|---|---|---|
+| `panda_py` (libfranka Python bindings) | https://github.com/JeanElsner/panda-py | wheels are on the [Releases page](https://github.com/JeanElsner/panda-py/releases), **not** on PyPI |
+| `pyrealsense2` (RealSense bindings) | https://github.com/IntelRealSense/librealsense | needs system `librealsense2` first ([install issue #12701](https://github.com/IntelRealSense/librealsense/issues/12701)) |
+| Original port of these scripts | https://github.com/zuxinrui/openpi_franka | brought in via commit `49e9cb0` on `franka-scripts` |
+
+## Downloading the panda_py wheel
+
+The bundled wheel `third_party/panda_python-0.7.5+libfranka.0.10.0-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl` decodes as:
+
+| Field | Value | Meaning |
+|---|---|---|
+| version | `0.7.5` | panda-py release |
+| local tag | `+libfranka.0.10.0` | **must match your Franka controller firmware** — `0.10.0` covers FCI firmware ≥ 4.2.x on classic Panda. For Franka Research 3 use `+libfranka.0.13.x` |
+| python | `cp38` | CPython 3.8 only |
+| platform | `manylinux_2_17_x86_64` | Linux x86_64 with glibc ≥ 2.17 (Ubuntu 18.04+) |
+
+To re-download or upgrade:
+
+1. Open https://github.com/JeanElsner/panda-py/releases
+2. Pick the panda-py version (e.g. `v0.7.5`) — older versions are kept on the page
+3. In its asset list, pick the wheel whose local tag matches **your robot's libfranka**
+4. Drop it into `third_party/` and update the install command in the next section
+
+## One-shot install (Python 3.8 client env)
+
+```
+conda create -n openpi-franka-client python=3.8 -y
+conda activate openpi-franka-client
+pip install pyrealsense2 pandas opencv-python tyro tqdm
+pip install packages/openpi-client
+pip install third_party/panda_python-0.7.5+libfranka.0.10.0-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+```
+
+The policy server runs in the regular openpi Python 3.11 `uv` env — only this client env needs Python 3.8. The two talk over WebSocket so they don't share a Python version.
+
+---
 
 ## Network configuration
 

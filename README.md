@@ -321,3 +321,114 @@ We will collect common issues and their solutions here. If you encounter an issu
 | Import errors when running examples       | Make sure you've installed all dependencies with `uv sync`. Some examples may have additional requirements listed in their READMEs.                    |
 | Action dimensions mismatch                | Verify your data processing transforms match the expected input/output dimensions of your robot. Check the action space definitions in your policy classes.                                  |
 | Diverging training loss                            | Check the `q01`, `q99`, and `std` values in `norm_stats.json` for your dataset. Certain dimensions that are rarely used can end up with very small `q01`, `q99`, or `std` values, leading to huge states and actions after normalization. You can manually adjust the norm stats as a workaround. |
+
+
+## Watch π₀.₅-DROID Run in Isaac Sim (Beginner Walkthrough)
+
+This is a step-by-step guide to running openpi's π₀.₅-DROID policy in an interactive Isaac Sim window on your own machine. You'll see a Franka Panda arm autonomously pick up a cube and place it in a bowl — driven entirely by the policy. Validated on dual RTX 3090.
+
+### What You'll See
+
+An Isaac Sim window opens with a Franka arm over a table. The arm reaches for a Rubik's cube, closes its gripper, lifts the cube, moves over a bowl, and drops it in — all without any scripted control. The entire motion comes from the policy running on your GPU.
+
+### What You Need
+
+Three repositories, cloned side-by-side:
+
+| Repo | What It Does | Where |
+|---|---|---|
+| **openpi** (this one) | Runs the policy server | You are here |
+| **dreamzero** | Provides the sim client script (`eval_utils/run_sim_eval.py`) | https://github.com/NVlabs/DreamZero |
+| **sim-evals** | Provides the DROID Isaac Lab environment + assets | https://github.com/arhanjain/sim-evals |
+
+Two Python environments:
+
+| Environment | What It Runs | How to Set Up |
+|---|---|---|
+| openpi's `.venv` | The policy server (JAX) | `uv sync` in this repo |
+| A conda env with Isaac Lab 2.x | Isaac Sim + the client script | See full playbook (link below) |
+
+Hardware:
+- **Two GPUs recommended** (e.g. dual RTX 3090). One for the policy, one for sim.
+- The sim **must** run on the GPU that has your monitor plugged into it (Vulkan swapchain requires a display-connected GPU).
+
+> First-time setup (asset downloads, conda env install, checkpoint paths, and every error we hit getting this to work) is all documented in [`docs/DROID_ISAAC_SIM_DEPLOYMENT.md`](docs/DROID_ISAAC_SIM_DEPLOYMENT.md). Read that first if anything below fails.
+
+### Step 1 — Start the Policy Server
+
+Open **Terminal 1** in the openpi directory. Copy-paste this single line:
+
+```bash
+CUDA_VISIBLE_DEVICES=1 XLA_PYTHON_CLIENT_MEM_FRACTION=0.9 uv run scripts/serve_policy.py --port 6000 policy:checkpoint --policy.config=pi05_droid_jointpos_polaris --policy.dir=gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris
+```
+
+What this does:
+- `CUDA_VISIBLE_DEVICES=1` — puts the policy on GPU 1 (leave GPU 0 free for sim)
+- `XLA_PYTHON_CLIENT_MEM_FRACTION=0.9` — lets JAX use up to 90% of the GPU (otherwise it stops at 75%)
+- `--port 6000` — the sim client expects port 6000 (not the default 8000!)
+- `--policy.config=pi05_droid_jointpos_polaris` — the π₀.₅-DROID joint-position variant
+- `--policy.dir=gs://...` — the checkpoint; downloaded once and cached at `~/.cache/openpi`
+
+Wait until you see **`INFO:root:Starting server on port 6000`**. The first launch downloads ~2 GB of weights (a few minutes); subsequent launches are ~10 seconds. **Leave this terminal running** — it's the policy backend the sim will call.
+
+### Step 2 — Start Isaac Sim and the Client
+
+Open **Terminal 2**. Activate your Isaac Lab conda env and run the client:
+
+```bash
+conda activate env_isaaclab_legacy
+cd /path/to/openpi
+CUDA_VISIBLE_DEVICES=0 python /path/to/dreamzero/eval_utils/run_sim_eval.py --episodes 1 --scene 1 --host localhost --port 6000 --no-headless
+```
+
+What this does:
+- `CUDA_VISIBLE_DEVICES=0` — puts the simulator on GPU 0 (the one with your monitor)
+- `cd /path/to/openpi` — so the rollout video is saved under `openpi/runs/...`
+- `--episodes 1` — one rollout
+- `--scene 1` — the cube-in-bowl scene
+- `--host localhost --port 6000` — where the policy server from Step 1 is listening
+- `--no-headless` — opens an interactive Isaac Sim window (default is headless = no window)
+
+Within ~30 seconds an Isaac Sim window should pop up showing the Franka arm, a table, a cube, and a bowl. The first few seconds may look frozen while scene assets load.
+
+### Step 3 — Watch It Run
+
+After loading finishes, the arm starts moving on its own:
+
+1. Reaches toward the cube
+2. Closes the gripper
+3. Lifts the cube
+4. Swings over to the bowl
+5. Opens the gripper and drops the cube
+
+When the episode ends, a video is saved to `openpi/runs/<date>/<time>/episode_0.mp4`.
+
+### Timing You'll Notice
+
+- **Policy inference**: every ~500 ms, the policy server returns a fresh chunk of 8 actions
+- **Robot control**: 15 Hz (one action applied every 66 ms)
+- **Viewport rendering**: tunable via `sim-evals/src/sim_evals/environments/droid_environment.py` → `self.sim.render_interval` (lower = smoother but uses more GPU)
+
+If the sim feels like it's in slow-motion, the rendering and camera capture are maxing out the GPU. Options: lower camera resolution, increase `render_interval`, or run on a bigger GPU.
+
+### Try Other Things
+
+| Change | How |
+|---|---|
+| Different scene / task | `--scene 2` (can into mug), `--scene 3` (banana into bin) |
+| More rollouts | `--episodes 10` — produces one MP4 per episode |
+| Different policy | Swap `--policy.config` and `--policy.dir` to e.g. `pi0_fast_droid_jointpos_polaris` (at `gs://openpi-assets/checkpoints/polaris/pi0_fast_droid_jointpos_polaris`) |
+| No GUI (faster, for batch eval) | Remove `--no-headless` — only the MP4 is saved |
+
+### If Something Breaks
+
+The deep troubleshooting playbook is at [`docs/DROID_ISAAC_SIM_DEPLOYMENT.md`](docs/DROID_ISAAC_SIM_DEPLOYMENT.md). Most common first-time errors:
+
+| Symptom | One-line Fix |
+|---|---|
+| `Config 'pi05_droid_jointpos' not found` | Upstream renamed it — use `pi05_droid_jointpos_polaris` and path `gs://openpi-assets/checkpoints/polaris/...` |
+| `Vulkan: Failed to find a graphics and/or presenting queue` | `CUDA_VISIBLE_DEVICES` for the sim must point to the GPU with your monitor attached |
+| `errno=28/No space left on device` (from Isaac Sim) | Not a disk issue — raise Linux inotify limit: `sudo sysctl fs.inotify.max_user_watches=524288` |
+| `Could not open asset my_droid.usdz` | `cd sim-evals/assets && ln -s franka_robotiq_2f_85_flattened.usd my_droid.usdz` |
+| `TypeError: connect() got unexpected keyword 'ping_interval'` | In the sim conda env: `pip install --upgrade "websockets>=13"` |
+| `cv2.error: Rebuild the library with GTK+` | The sim env has `opencv-python-headless`; comment out the `cv2.imshow(...)` line in `run_sim_eval.py` |
